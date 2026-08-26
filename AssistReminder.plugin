@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<Plugin>
+	<Information>
+		<Name>Assist Reminder</Name>
+		<Author>Sparthir</Author>
+		<Version>1.0</Version>
+		<Description>Reminds the fellowship leader to set an assist target when none is set.
+		</Description>
+	</Information>
+	<Package>Sparthir.AssistReminder.Main</Package>
+</Plugin>
