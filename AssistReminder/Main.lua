@@ -30,10 +30,10 @@ end
 
 -- ---------------------------------------------------------------- module state
 local tickerWindow   = nil;
-local elapsed        = 0;
 local scheduler      = {};      -- { {time=..., fn=...}, ... }
-local localPlayer    = nil;
-local myName         = nil;
+local localPlayer    = Turbine.Gameplay.LocalPlayer.GetInstance();
+local myName         = localPlayer:GetName();
+Log(string.format(L.LogWatching, tostring(myName)));
 local pollStarted    = nil;
 
 local inFellowship    = false;  -- Stage 5 snapshot results
@@ -49,13 +49,14 @@ local shownForFormation = false;-- already shown for current formation
 
 -- ------------------------------------------------------------- Stage 2: ticker
 local function ScheduleOnce(delay, fn)
-	scheduler[#scheduler + 1] = { time = elapsed + delay, fn = fn };
+	scheduler[#scheduler + 1] = { time = Turbine.Engine.GetGameTime() + delay, fn = fn };
 end
 
 local function RunScheduler()
+	local now = Turbine.Engine.GetGameTime();
 	for i = #scheduler, 1, -1 do
 		local item = scheduler[i];
-		if elapsed >= item.time then
+		if now >= item.time then
 			table.remove(scheduler, i);
 			-- T2.4: a throwing callback must not break later items,
 			-- but log so failures are never silent.
@@ -64,30 +65,24 @@ local function RunScheduler()
 	end
 end
 
--- ------------------------------------------------------------ Stage 3: init
-local function DeferredInit()
-	if myName ~= nil then return end;
-
-	localPlayer = Turbine.Gameplay.LocalPlayer.GetInstance();
-	myName = localPlayer:GetName();
-	Log(string.format(L.LogWatching, tostring(myName)));
-end
 -- ------------------------------------------------- Stage 5: party snapshot burst
 local function SnapshotParty()
-	-- analyzer can't prove init order (DeferredInit runs via ticker)
-	if localPlayer == nil then return end;
+	-- Force LOTRO to behave:
+    local party = localPlayer:GetParty();
+	if (party == nil) then return; end
+	local partyMembers = {}
+	for i = 1, memberCount do
+		partyMembers[i] = party:GetMember(i);
+	end
+	-- End Force LOTRO to behave
 
 	inFellowship = false;
 	leaderName = nil;
 	memberCount = 0;
 	assistTargetCount = nil;
 
-	-- docs: Turbine_Gameplay_Player_GetParty.html — nil when solo
-	local party = localPlayer:GetParty();
-	if party == nil then return end;
-
-		-- docs: Turbine_Gameplay_Party_GetLeader.html — returns Player object,
-		-- not a string; compare via GetName()
+--		-- docs: Turbine_Gameplay_Party_GetLeader.html — returns Player object,
+--		-- not a string; compare via GetName()
 	local leader = party:GetLeader();
 		if leader ~= nil then
 			leaderName = leader:GetName();
@@ -191,13 +186,7 @@ local function OnLoad(args)
 	tickerWindow:SetMouseVisible(false); -- docs: Turbine_UI_Control_SetMouseVisible.html
 	tickerWindow:SetWantsUpdates(true);
 	tickerWindow.Update = function(sender, args)
-		elapsed = elapsed + (args and args.DeltaTime or 0.05);
 		RunScheduler();
-
-			-- Stage 3: deferred player init at t >= 2s
-		if elapsed >= 2 then
-			DeferredInit(); -- self-disables once myName is set
-		end
 
 			-- Stage 4: start polling once init done
 		if myName ~= nil and pollStarted == nil then
@@ -226,4 +215,3 @@ end
 
 Turbine.Plugin.Load = OnLoad;
 Turbine.Plugin.Unload = OnUnload;
-
