@@ -3,6 +3,9 @@
 import "Turbine.UI";
 import "Turbine.UI.Lotro";
 
+-- NOTE: class() is provided by the Turbine Lua runtime at load time; it has
+-- no declaration in the lotro-api EmmyLua stubs, hence the suppression.
+---@diagnostic disable-next-line: undefined-global
 AssistReminderReminderWindow = class(Turbine.UI.Lotro.Window);
 
 function AssistReminderReminderWindow:Constructor()
@@ -15,8 +18,7 @@ function AssistReminderReminderWindow:Constructor()
 		(Turbine.UI.Display.GetHeight() - self:GetHeight()) / 2);
 	self:SetOpacity(1);
 
-	-- R5-style safety: Escape must reach the window.
-	pcall(function() self:SetWantsKeyEvents(true); end);
+	self:SetWantsKeyEvents(true);
 
 	self.heading = Turbine.UI.Label();
 	self.heading:SetParent(self);
@@ -43,7 +45,7 @@ function AssistReminderReminderWindow:Constructor()
 	self.okButton:SetSize(80, 26);
 	self.okButton:SetPosition((self:GetWidth() - 80) / 2, 150);
 
-	-- optional callback invoked on dismissal (pcall'd by Dismiss)
+	-- optional callback invoked on dismissal
 	self.onDismiss = nil;
 
 	self.okButton.Click = function(sender, args)
@@ -51,11 +53,10 @@ function AssistReminderReminderWindow:Constructor()
 	end;
 
 	self.KeyDown = function(sender, args)
-		-- Docs don't enumerate args fields; installed plugins (e.g.
-		-- SongbookBBLE) read args.Action. Escape = Windows VK 0x1B (27).
-		local key = args.Key;
-		if key == nil then key = args.Action; end
-		if key == 27 then
+		-- Documented KeyDown args fields are Action / Alt / Control / Shift
+		-- (there is no args.Key). On KeyDown, args.Action carries the
+		-- Windows virtual-key code; Escape = VK 0x1B (27).
+		if args.Action == 27 then
 			self:Dismiss();
 		end
 	end;
@@ -67,15 +68,12 @@ end
 
 function AssistReminderReminderWindow:Show()
 	self:SetVisible(true);
-	pcall(function() self:Activate(); end);
+	self:Activate();
 end
 
 function AssistReminderReminderWindow:Dismiss()
 	self:SetVisible(false);
 	if self.onDismiss ~= nil then
-		local ok, err = pcall(self.onDismiss);
-		if not ok then
-			Log(string.format("onDismiss error: %s", tostring(err)));
-		end
+		self.onDismiss();
 	end
 end
