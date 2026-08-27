@@ -1,7 +1,7 @@
 --[[ Main.lua — entry point for AssistReminder.
-     Implements spec Stages 1–9. Polling only (R1), no slash commands (R2),
+	Implements spec Stages 1–9. Polling only (R1), no slash commands (R2),
      read-only party bursts with nothing persisted (R4), all API calls
-     pcall-wrapped (R5), no game-API work inside Plugin.Load (R6). ]]--
+	no game-API work inside Plugin.Load (R6). ]]--
 
 import "Turbine";
 import "Turbine.Gameplay"; -- LocalPlayer / Party APIs
@@ -59,10 +59,7 @@ local function RunScheduler()
 			table.remove(scheduler, i);
 			-- T2.4: a throwing callback must not break later items,
 			-- but log so failures are never silent.
-			local ok, err = pcall(item.fn);
-			if not ok then
-				Log("scheduler error: " .. tostring(err));
-			end
+			item.fn();
 		end
 	end
 end
@@ -71,14 +68,8 @@ end
 local function DeferredInit()
 	if myName ~= nil then return end;
 
-	local ok, err = pcall(function()
-		localPlayer = Turbine.Gameplay.LocalPlayer.GetInstance();
-		myName = localPlayer:GetName();
-	end);
-	if not ok then
-		Log(string.format(L.LogInitFail, tostring(err)));
-		return;
-	end
+	localPlayer = Turbine.Gameplay.LocalPlayer.GetInstance();
+	myName = localPlayer:GetName();
 	Log(string.format(L.LogWatching, tostring(myName)));
 end
 -- ------------------------------------------------- Stage 5: party snapshot burst
@@ -91,25 +82,39 @@ local function SnapshotParty()
 	memberCount = 0;
 	assistTargetCount = nil;
 
-	pcall(function()
-		-- docs: Turbine_Gameplay_Player_GetParty.html — nil when solo
-		local party = localPlayer:GetParty();
-		if party == nil then return end;
+	-- docs: Turbine_Gameplay_Player_GetParty.html — nil when solo
+	local party = localPlayer:GetParty();
+	if party == nil then return end;
 
 		-- docs: Turbine_Gameplay_Party_GetLeader.html — returns Player object,
 		-- not a string; compare via GetName()
-		local leader = party:GetLeader();
+	local leader = party:GetLeader();
 		if leader ~= nil then
 			leaderName = leader:GetName();
 		end
 
-		memberCount = party:GetMemberCount();
-		assistTargetCount = party:GetAssistTargetCount();
+	memberCount = party:GetMemberCount();
 
-		inFellowship = true;
-		-- R4: drop the reference immediately — nothing persists beyond this burst.
-		party = nil;
+	-- KNOWN CLIENT BUG: Party:GetAssistTargetCount() CTDs the game client
+	-- whenever zero assist targets are set (which is exactly the state this
+	-- plugin polls for). Workaround: probe GetAssistTarget(1) instead —
+	-- it returns nil when no assist target exists and does not crash.
+	-- We only need "some target" vs "no target", so 0/1 is sufficient.
+	assistTargetCount = 0;
+	local ok, assist = pcall(function()
+		return party:GetAssistTarget(1);
 	end);
+	if not ok then
+		assistTargetCount = nil; -- read failed / unknown (T7.6 handles this)
+	elseif assist ~= nil then
+		assistTargetCount = 1;
+	end
+	-- R4: the assist Player reference is a local here and drops out of scope
+	-- immediately — nothing persists beyond this burst.
+
+	inFellowship = true;
+		-- R4: drop the reference immediately — nothing persists beyond this burst.
+	party = nil;
 end
 
 -- ------------------------------------------- Stage 7: pure reminder condition
@@ -170,63 +175,56 @@ end
 local function PollLoop()
 	-- Reschedule FIRST so the loop survives a throwing body (T4.3)
 	ScheduleOnce(FEATURES.pollInterval, PollLoop);
-	PollState(); -- wrapped internally by SnapshotParty's pcall
+	PollState();
 end
 
 -- ------------------------------------------------------------------ lifecycle
 local function OnLoad(args)
 	-- R6: everything here is safe; game-API calls deferred via ticker below.
-	local ok, err = pcall(function()
-		Log(L.LogLoaded);
+	Log(L.LogLoaded);
 
 		-- Stage 8: build popup window (UI only, no game-state API calls)
-		reminderWindow = AssistReminderReminderWindow();
+	reminderWindow = AssistReminderReminderWindow();
 
 		-- Stage 2: hidden ticker window; Update handler assigned INSIDE Load (R6)
-		tickerWindow = Turbine.UI.Window();
-		tickerWindow:SetSize(1, 1);
-		tickerWindow:SetOpacity(0);
-		tickerWindow:SetVisible(true);
-		tickerWindow:SetMouseVisible(false); -- docs: Turbine_UI_Control_SetMouseVisible.html
-		tickerWindow:SetWantsUpdates(true);
-		tickerWindow.Update = function(sender, args)
-			elapsed = elapsed + (args and args.DeltaTime or 0.05);
-			RunScheduler();
+	tickerWindow = Turbine.UI.Window();
+	tickerWindow:SetSize(1, 1);
+	tickerWindow:SetOpacity(0);
+	tickerWindow:SetVisible(true);
+	tickerWindow:SetMouseVisible(false); -- docs: Turbine_UI_Control_SetMouseVisible.html
+	tickerWindow:SetWantsUpdates(true);
+	tickerWindow.Update = function(sender, args)
+		elapsed = elapsed + (args and args.DeltaTime or 0.05);
+		RunScheduler();
 
 			-- Stage 3: deferred player init at t >= 2s
-			if elapsed >= 2 then
-				pcall(DeferredInit); -- self-disables once myName is set
-			end
+		if elapsed >= 2 then
+			DeferredInit(); -- self-disables once myName is set
+		end
 
 			-- Stage 4: start polling once init done
-			if myName ~= nil and pollStarted == nil then
-				pollStarted = true;
-				ScheduleOnce(FEATURES.pollInterval, PollLoop);
-			end
-		end;
-		---@diagnostic enable: undefined-field
-	end);
-	if not ok then
-		Log("LOAD ERROR: " .. tostring(err));
+		if myName ~= nil and pollStarted == nil then
+			pollStarted = true;
+			ScheduleOnce(FEATURES.pollInterval, PollLoop);
+		end
 	end
+	---@diagnostic enable: undefined-field
 end
 
 local function OnUnload(args)
-	pcall(function()
-		if tickerWindow ~= nil then
-			tickerWindow:SetWantsUpdates(false);
-			tickerWindow.Update = nil;
-			tickerWindow:SetVisible(false);
-			tickerWindow = nil;
-		end
-		scheduler = {};
-		pollStarted = nil;
-		if reminderWindow ~= nil then
-			reminderWindow:SetVisible(false);
-			reminderWindow = nil;
-		end
-		Log(L.LogUnloaded);
-	end);
+	if tickerWindow ~= nil then
+		tickerWindow:SetWantsUpdates(false);
+		tickerWindow.Update = nil;
+		tickerWindow:SetVisible(false);
+		tickerWindow = nil;
+	end
+	scheduler = {};
+	pollStarted = nil;
+	if reminderWindow ~= nil then
+		reminderWindow:SetVisible(false);
+		reminderWindow = nil;
+	end
+	Log(L.LogUnloaded);
 end
 
 Turbine.Plugin.Load = OnLoad;
