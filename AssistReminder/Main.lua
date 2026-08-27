@@ -101,14 +101,11 @@ local function SnapshotParty()
 	-- it returns nil when no assist target exists and does not crash.
 	-- We only need "some target" vs "no target", so 0/1 is sufficient.
 	assistTargetCount = 0;
-	local ok, assist = pcall(function()
-		return party:GetAssistTarget(1);
-	end);
-	if not ok then
-		assistTargetCount = nil; -- read failed / unknown (T7.6 handles this)
-	elseif assist ~= nil then
+	local assist = party:GetAssistTarget(1);
+	if assist ~= nil then
 		assistTargetCount = 1;
 	end
+	--assistTargetCount = party:GetAssistTargetCount(); -- API bug CTD with 0 assist targets
 	-- R4: the assist Player reference is a local here and drops out of scope
 	-- immediately — nothing persists beyond this burst.
 
