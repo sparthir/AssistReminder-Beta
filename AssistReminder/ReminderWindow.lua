@@ -9,8 +9,10 @@ import "Turbine.UI.Lotro";
 AssistReminderReminderWindow = class(Turbine.UI.Lotro.Window);
 
 function AssistReminderReminderWindow:Constructor()
+	-- Always chain to the base class constructor first.
 	Turbine.UI.Lotro.Window.Constructor(self);
 
+	-- Window chrome: title text, size, and centered on screen.
 	self:SetText(AssistReminderLocale.Title);
 	self:SetSize(360, 200);
 	self:SetPosition(
@@ -18,8 +20,10 @@ function AssistReminderReminderWindow:Constructor()
 		(Turbine.UI.Display.GetHeight() - self:GetHeight()) / 2);
 	self:SetOpacity(1);
 
+	-- Listen for key events so Escape can dismiss the popup.
 	self:SetWantsKeyEvents(true);
 
+	-- Heading label: short "alarm" line at the top of the popup.
 	self.heading = Turbine.UI.Label();
 	self.heading:SetParent(self);
 	self.heading:SetText(AssistReminderLocale.Heading);
@@ -29,6 +33,7 @@ function AssistReminderReminderWindow:Constructor()
 	self.heading:SetPosition(20, 45);
 	self.heading:SetSize(320, 24);
 
+	-- Body label: longer explanatory message under the heading (multi-line).
 	self.body = Turbine.UI.Label();
 	self.body:SetParent(self);
 	self.body:SetText(AssistReminderLocale.Body);
@@ -39,15 +44,17 @@ function AssistReminderReminderWindow:Constructor()
 	self.body:SetPosition(20, 75);
 	self.body:SetSize(320, 70);
 
+	-- OK button: horizontally centered near the bottom; clicking dismisses.
 	self.okButton = Turbine.UI.Lotro.Button();
 	self.okButton:SetParent(self);
 	self.okButton:SetText(AssistReminderLocale.OkButton);
 	self.okButton:SetSize(80, 26);
 	self.okButton:SetPosition((self:GetWidth() - 80) / 2, 150);
 
-	-- optional callback invoked on dismissal
+	-- optional callback invoked on dismissal (see SetOnDismiss)
 	self.onDismiss = nil;
 
+	-- Clicking OK hides the window and fires the onDismiss callback.
 	self.okButton.Click = function(sender, args)
 		self:Dismiss();
 	end;
@@ -66,11 +73,13 @@ function AssistReminderReminderWindow:SetOnDismiss(fn)
 	self.onDismiss = fn;
 end
 
+-- Show the window and give it focus so it grabs the player's attention.
 function AssistReminderReminderWindow:Show()
 	self:SetVisible(true);
 	self:Activate();
 end
 
+-- Hide the window and notify any registered onDismiss callback.
 function AssistReminderReminderWindow:Dismiss()
 	self:SetVisible(false);
 	if self.onDismiss ~= nil then

@@ -29,6 +29,12 @@ function Log(msg)
 	Turbine.Shell.WriteLine(L.LogPrefix .. tostring(msg));
 end
 
+-- Globals used by the reminder state machine:
+-- tickerWindow   : invisible 1x1 window whose Update() tick drives the scheduler
+-- scheduler      : pending one-shot callbacks, each { time = <game time>, fn = <callable> }
+-- localPlayer    : cached LocalPlayer instance (obtained once at load, not per-poll)
+-- myName         : cached player name for cheap leader comparisons
+-- pollStarted    : flag so the poll loop only starts once (first Update tick)
 local tickerWindow   = nil;
 local scheduler      = {};      -- { {time=..., fn=...}, ... }
 local localPlayer    = Turbine.Gameplay.LocalPlayer.GetInstance();
@@ -38,21 +44,28 @@ if FEATURES.displayLog then
 end
 local pollStarted    = nil;
 
-local inFellowship    = false;
-local leaderName      = nil;
-local memberCount     = 0;
-local assistTargetCount = nil;
+-- Cached snapshot of the last poll (used by HandleCondition + debug logging):
+local inFellowship    = false;   -- is the player currently in a fellowship?
+local leaderName      = nil;     -- name of the current fellowship leader, if any
+local memberCount     = 0;       -- number of fellowship members
+local assistTargetCount = nil;   -- 0 = no assist target, 1 = at least one target
 
-local amLeader        = false;
+local amLeader        = false;   -- am I the fellowship leader this poll?
 
-local reminderWindow  = nil;
-local conditionMet    = false;
-local shownForFormation = false;
+-- UI + reminder-lifecycle state:
+local reminderWindow  = nil;         -- the popup window (created on load)
+local conditionMet    = false;       -- was the remind condition true last poll?
+local shownForFormation = false;     -- have we already shown for this fellowship formation?
 
+-- Schedule a one-shot callback after `delay` seconds (game time).
+-- Callbacks fire from RunScheduler(), driven by the ticker window's Update.
 local function ScheduleOnce(delay, fn)
 	scheduler[#scheduler + 1] = { time = Turbine.Engine.GetGameTime() + delay, fn = fn };
 end
 
+-- Run all scheduler callbacks whose time has come.
+-- Iterates backwards because table.remove() shifts later indices down;
+-- iterating from the end keeps pending (not-yet-due) items indexed correctly.
 local function RunScheduler()
 	local now = Turbine.Engine.GetGameTime();
 	for i = #scheduler, 1, -1 do
@@ -64,8 +77,12 @@ local function RunScheduler()
 	end
 end
 
+-- Read the current fellowship state from the game API into the cached
+-- snapshot variables (inFellowship, leaderName, memberCount, assistTargetCount).
 local function SnapshotParty()
 	-- Force LOTRO to behave:
+	-- Touching the party + members once up front seems to be required before
+	-- the assist-target reads return valid data (client quirk workaround).
 	local party = localPlayer:GetParty();
 	if (party == nil) then return; end
 	local partyMembers = {}
@@ -74,6 +91,8 @@ local function SnapshotParty()
 	end
 	-- End Force LOTRO to behave
 
+	-- Reset the snapshot; it is rebuilt below. If any API read fails or the
+	-- player is not in a fellowship, these defaults are what remains.
 	inFellowship = false;
 	leaderName = nil;
 	memberCount = 0;
@@ -100,10 +119,14 @@ local function SnapshotParty()
 	end
 	--assistTargetCount = party:GetAssistTargetCount(); -- API bug CTD with 0 assist targets
 
+	-- All reads succeeded, so we have a valid fellowship snapshot.
 	inFellowship = true;
 	party = nil;
 end
 
+-- Decide whether the reminder should currently be shown.
+-- Only the fellowship leader (in a real fellowship of 2+ members) with zero
+-- assist targets set should be reminded.
 function ShouldRemind(state)
 	if state.amLeader and state.memberCount >= 2 then
 		return state.assistTargetCount ~= nil and state.assistTargetCount == 0;
@@ -111,8 +134,12 @@ function ShouldRemind(state)
 	return false;
 end
 
+-- Show or hide the reminder window based on the condition, honouring the
+-- reShowOnClear / shownForFormation rules, and reset state when it clears.
 local function HandleCondition(remind)
 	if remind and not conditionMet then
+		-- Condition just became true. Show the popup unless it was already
+		-- shown for this formation and reShowOnClear is disabled.
 		if FEATURES.reShowOnClear or not shownForFormation then
 			shownForFormation = true;
 			if reminderWindow ~= nil then
@@ -120,6 +147,8 @@ local function HandleCondition(remind)
 			end
 		end
 	elseif not remind then
+		-- Condition is false: reset the once-per-formation flag if we left
+		-- the fellowship entirely, and hide the popup if it is showing.
 		if not inFellowship then
 			shownForFormation = false;
 		end
@@ -130,6 +159,8 @@ local function HandleCondition(remind)
 	conditionMet = remind;
 end
 
+-- One poll cycle: snapshot the party, evaluate the remind condition,
+-- optionally log it, then update the reminder window accordingly.
 local function PollState()
 	SnapshotParty();
 
@@ -153,11 +184,15 @@ local function PollState()
 	HandleCondition(remind);
 end
 
+-- Self-rescheduling poll loop: schedules the next run first (so a slow or
+-- erroring poll can't stop future polls), then performs this cycle's work.
 local function PollLoop()
 	ScheduleOnce(FEATURES.pollInterval, PollLoop);
 	PollState();
 end
 
+-- Plugin load handler: create the reminder window, then set up an invisible
+-- 1x1 "ticker" window whose Update() drives the scheduler and starts polling.
 local function OnLoad(args)
 	if FEATURES.displayLog then
 		Log(L.LogLoaded);
@@ -166,13 +201,18 @@ local function OnLoad(args)
 	reminderWindow = AssistReminderReminderWindow();
 
 	tickerWindow = Turbine.UI.Window();
+	-- An invisible 1x1 window used purely as an Update() tick source
+	-- (the only reliable way to get periodic callbacks in LOTRO plugins).
 	tickerWindow:SetSize(1, 1);
 	tickerWindow:SetOpacity(0);
 	tickerWindow:SetVisible(true);
 	tickerWindow:SetMouseVisible(false);
 	tickerWindow:SetWantsUpdates(true);
 	tickerWindow.Update = function(sender, args)
+		-- Fire any due scheduled callbacks...
 		RunScheduler();
+		-- ...and kick off the poll loop exactly once, but only once we know
+		-- the player's name (myName is nil during early client startup).
 		if myName ~= nil and pollStarted == nil then
 			pollStarted = true;
 			ScheduleOnce(FEATURES.pollInterval, PollLoop);
@@ -180,6 +220,8 @@ local function OnLoad(args)
 	end
 end
 
+-- Plugin unload handler: stop the ticker, drop all scheduled callbacks,
+-- and hide/destroy the reminder window.
 local function OnUnload(args)
 	if tickerWindow ~= nil then
 		tickerWindow:SetWantsUpdates(false);
