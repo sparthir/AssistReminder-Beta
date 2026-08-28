@@ -1,6 +1,6 @@
 --[[ Main.lua — entry point for AssistReminder.
 	Implements spec Stages 1–9. Polling only (R1), no slash commands (R2),
-     read-only party bursts with nothing persisted (R4), all API calls
+	 read-only party bursts with nothing persisted (R4), all API calls
 	no game-API work inside Plugin.Load (R6). ]]--
 
 import "Turbine";
@@ -11,13 +11,14 @@ import "Turbine.Gameplay"; -- LocalPlayer / Party APIs
 import "Sparthir.AssistReminder.Locale";
 import "Sparthir.AssistReminder.ReminderWindow";
 
--- Stage 1/3/4 configuration
+-- Configuration features - tweak these to suit.
 local FEATURES = {
 	pollInterval  = 1.0;   -- seconds between state polls
 	reShowOnClear = true;  -- true: reminder re-shows if targets cleared again
-	                       --       in the same fellowship
-	                       -- false: strictly once per fellowship formation
+						   --       in the same fellowship
+						   -- false: strictly once per fellowship formation
 	debugChatLog  = false; -- diagnostic logging of poll results
+	displayLog	  = false; -- display basic logging info
 };
 
 AssistReminderLocale = AssistReminderLocale or {};
@@ -28,26 +29,26 @@ function Log(msg)
 	Turbine.Shell.WriteLine(L.LogPrefix .. tostring(msg));
 end
 
--- ---------------------------------------------------------------- module state
 local tickerWindow   = nil;
 local scheduler      = {};      -- { {time=..., fn=...}, ... }
 local localPlayer    = Turbine.Gameplay.LocalPlayer.GetInstance();
 local myName         = localPlayer:GetName();
-Log(string.format(L.LogWatching, tostring(myName)));
+if FEATURES.displayLog then
+	Log(string.format(L.LogWatching, tostring(myName)));
+end
 local pollStarted    = nil;
 
-local inFellowship    = false;  -- Stage 5 snapshot results
+local inFellowship    = false;
 local leaderName      = nil;
 local memberCount     = 0;
-local assistTargetCount = nil;  -- nil = read failed / unknown
+local assistTargetCount = nil;
 
-local amLeader        = false;  -- Stage 6
+local amLeader        = false;
 
-local reminderWindow  = nil;    -- Stage 8
-local conditionMet    = false;  -- Stage 9 edge detection
-local shownForFormation = false;-- already shown for current formation
+local reminderWindow  = nil;
+local conditionMet    = false;
+local shownForFormation = false;
 
--- ------------------------------------------------------------- Stage 2: ticker
 local function ScheduleOnce(delay, fn)
 	scheduler[#scheduler + 1] = { time = Turbine.Engine.GetGameTime() + delay, fn = fn };
 end
@@ -58,17 +59,14 @@ local function RunScheduler()
 		local item = scheduler[i];
 		if now >= item.time then
 			table.remove(scheduler, i);
-			-- T2.4: a throwing callback must not break later items,
-			-- but log so failures are never silent.
 			item.fn();
 		end
 	end
 end
 
--- ------------------------------------------------- Stage 5: party snapshot burst
 local function SnapshotParty()
 	-- Force LOTRO to behave:
-    local party = localPlayer:GetParty();
+	local party = localPlayer:GetParty();
 	if (party == nil) then return; end
 	local partyMembers = {}
 	for i = 1, memberCount do
@@ -81,8 +79,8 @@ local function SnapshotParty()
 	memberCount = 0;
 	assistTargetCount = nil;
 
---		-- docs: Turbine_Gameplay_Party_GetLeader.html — returns Player object,
---		-- not a string; compare via GetName()
+	-- docs: Turbine_Gameplay_Party_GetLeader.html — returns Player object,
+	-- not a string; compare via GetName()
 	local leader = party:GetLeader();
 		if leader ~= nil then
 			leaderName = leader:GetName();
@@ -101,27 +99,20 @@ local function SnapshotParty()
 		assistTargetCount = 1;
 	end
 	--assistTargetCount = party:GetAssistTargetCount(); -- API bug CTD with 0 assist targets
-	-- R4: the assist Player reference is a local here and drops out of scope
-	-- immediately — nothing persists beyond this burst.
 
 	inFellowship = true;
-		-- R4: drop the reference immediately — nothing persists beyond this burst.
 	party = nil;
 end
 
--- ------------------------------------------- Stage 7: pure reminder condition
 function ShouldRemind(state)
-	-- T7.6: unknown target count treated as "has targets"
 	if state.amLeader and state.memberCount >= 2 then
 		return state.assistTargetCount ~= nil and state.assistTargetCount == 0;
 	end
 	return false;
 end
 
--- --------------------------------------------------- Stage 9: show/hide policy
 local function HandleCondition(remind)
 	if remind and not conditionMet then
-		-- unmet -> met edge
 		if FEATURES.reShowOnClear or not shownForFormation then
 			shownForFormation = true;
 			if reminderWindow ~= nil then
@@ -129,7 +120,6 @@ local function HandleCondition(remind)
 			end
 		end
 	elseif not remind then
-		-- leaving the fellowship resets per-formation memory (T9.5)
 		if not inFellowship then
 			shownForFormation = false;
 		end
@@ -140,11 +130,10 @@ local function HandleCondition(remind)
 	conditionMet = remind;
 end
 
--- ---------------------------------------------------- Stage 4: polling engine
 local function PollState()
 	SnapshotParty();
 
-	amLeader = inFellowship and leaderName == myName; -- Stage 6
+	amLeader = inFellowship and leaderName == myName;
 	local remind = ShouldRemind({
 		amLeader = amLeader;
 		memberCount = memberCount;
@@ -165,36 +154,30 @@ local function PollState()
 end
 
 local function PollLoop()
-	-- Reschedule FIRST so the loop survives a throwing body (T4.3)
 	ScheduleOnce(FEATURES.pollInterval, PollLoop);
 	PollState();
 end
 
--- ------------------------------------------------------------------ lifecycle
 local function OnLoad(args)
-	-- R6: everything here is safe; game-API calls deferred via ticker below.
-	Log(L.LogLoaded);
+	if FEATURES.displayLog then
+		Log(L.LogLoaded);
+	end
 
-		-- Stage 8: build popup window (UI only, no game-state API calls)
 	reminderWindow = AssistReminderReminderWindow();
 
-		-- Stage 2: hidden ticker window; Update handler assigned INSIDE Load (R6)
 	tickerWindow = Turbine.UI.Window();
 	tickerWindow:SetSize(1, 1);
 	tickerWindow:SetOpacity(0);
 	tickerWindow:SetVisible(true);
-	tickerWindow:SetMouseVisible(false); -- docs: Turbine_UI_Control_SetMouseVisible.html
+	tickerWindow:SetMouseVisible(false);
 	tickerWindow:SetWantsUpdates(true);
 	tickerWindow.Update = function(sender, args)
 		RunScheduler();
-
-			-- Stage 4: start polling once init done
 		if myName ~= nil and pollStarted == nil then
 			pollStarted = true;
 			ScheduleOnce(FEATURES.pollInterval, PollLoop);
 		end
 	end
-	---@diagnostic enable: undefined-field
 end
 
 local function OnUnload(args)
@@ -210,7 +193,9 @@ local function OnUnload(args)
 		reminderWindow:SetVisible(false);
 		reminderWindow = nil;
 	end
-	Log(L.LogUnloaded);
+	if FEATURES.displayLog then
+		Log(L.LogUnloaded);
+	end
 end
 
 Turbine.Plugin.Load = OnLoad;
