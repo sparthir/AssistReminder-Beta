@@ -69,4 +69,4 @@ familiar with Lua, and I've used a coding AI to help me write this plugin.
 ## Feedback
 
 Bugs and suggestions welcome — open an issue or pull request on GitHub:
-[AsssistReminder-Beta](https://github.com/sparthir/AssistReminder-Beta.git)
+[Asssist Reminder](https://github.com/sparthir/AssistReminder/)
